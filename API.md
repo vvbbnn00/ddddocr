@@ -25,7 +25,7 @@ DDDDOCR_PORT=8001 DDDDOCR_MAX_CONCURRENCY=4 DDDDOCR_INFERENCE_THREADS=1 \
   docker compose up -d --build --wait
 ```
 
-Dockerfile 支持 Linux amd64 / arm64 原生构建。构建需要访问 crates.io、GitHub 和 ONNX Runtime 依赖下载地址。仓库提供双架构 Linux CI，验证构建、单元测试和容器 HTTP 接口。
+Dockerfile 支持 Linux amd64 / arm64 原生构建。构建从 crates.io 获取锁定版本的 Rust 依赖，并从 ONNX Runtime 二进制分发站下载运行库，不克隆其他 Git 仓库；仍需要网络访问软件包源。仓库提供双架构 Linux CI，验证构建、单元测试和容器 HTTP 接口。
 
 ## 推荐：直接发送图片字节
 

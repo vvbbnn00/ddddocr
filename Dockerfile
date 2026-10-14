@@ -1,13 +1,16 @@
 # syntax=docker/dockerfile:1
 FROM rust:1.96-bookworm AS build
 WORKDIR /app
+ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
 RUN apt-get update && apt-get install -y --no-install-recommends cmake pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY model ./model
 COPY initialize.json list.json ./
-RUN cargo build --release --locked
+# Refuse Git dependencies before Cargo can fetch any repository.
+RUN ! grep -q '^source = "git+' Cargo.lock \
+    && cargo build --release --locked
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 libgomp1 libstdc++6 curl \

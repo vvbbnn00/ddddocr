@@ -15,6 +15,12 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Reject Git dependencies
+        run: |
+          if grep -q '^source = "git+' Cargo.lock; then
+            echo "Git dependencies are not allowed"
+            exit 1
+          fi
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked

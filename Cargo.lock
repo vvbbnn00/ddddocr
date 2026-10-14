@@ -729,6 +729,7 @@ dependencies = [
  "multer",
  "ndarray",
  "ort",
+ "ort-sys",
  "salvo",
  "serde",
  "serde_json",
@@ -2106,7 +2107,8 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 [[package]]
 name = "ort"
 version = "2.0.0-rc.4"
-source = "git+https://github.com/86maid/ort.git?rev=5f1a53df1ec78dfabf02c5b7c71ecb967e21cf72#5f1a53df1ec78dfabf02c5b7c71ecb967e21cf72"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86d83095ae3c1258738d70ae7a06195c94d966a8e546f0d3609dc90885fb61f5"
 dependencies = [
  "half",
  "js-sys",
@@ -2121,7 +2123,8 @@ dependencies = [
 [[package]]
 name = "ort-sys"
 version = "2.0.0-rc.4"
-source = "git+https://github.com/86maid/ort.git?rev=5f1a53df1ec78dfabf02c5b7c71ecb967e21cf72#5f1a53df1ec78dfabf02c5b7c71ecb967e21cf72"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f2f6427193c808010b126bef45ebd33f8dee43770223a1200f84d3734d6c656"
 dependencies = [
  "flate2",
  "pkg-config",

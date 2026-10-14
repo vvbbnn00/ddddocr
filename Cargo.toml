@@ -19,12 +19,14 @@ load-dynamic = ["ort/load-dynamic"]
 download-binaries = ["ort/download-binaries"]
 
 [dependencies]
-# 推理与数值计算，删除 Windows DML 以增加兼容性
-ort = { git = "https://github.com/86maid/ort.git", rev = "5f1a53df1ec78dfabf02c5b7c71ecb967e21cf72", default-features = false, features = [
+# 推理与数值计算
+ort = { version = "=2.0.0-rc.4", default-features = false, features = [
   "ndarray",
   "half",
   "copy-dylibs",
 ] }
+# ort uses a prerelease range for ort-sys; pin the matching ABI explicitly.
+ort-sys = { version = "=2.0.0-rc.4", default-features = false }
 ndarray = "0.15"
 
 # 序列化 / 反序列化
