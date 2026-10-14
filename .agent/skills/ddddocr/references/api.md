@@ -19,12 +19,12 @@ Get the current status of the ddddocr service.
 **Response:**
 ```json
 {
-  "code": 200,
-  "msg": "success",
-  "data": {
-    "service_status": "running",
-    "enabled_features": ["ocr", "det", "slide"]
-  }
+  "service_status": "running",
+  "enabled_features": [
+    "ocr",
+    "det",
+    "slide"
+  ]
 }
 ```
 
@@ -52,12 +52,8 @@ Perform optical character recognition on an image.
 **Response:**
 ```json
 {
-  "code": 200,
-  "msg": "success",
-  "data": {
-    "text": "九乘六等于？",
-    "probability": null
-  }
+  "result": "九乘六等于？",
+  "processing_time": 0.012
 }
 ```
 
@@ -77,15 +73,25 @@ Detect objects in an image.
 **Response:**
 ```json
 {
-  "code": 200,
-  "msg": "success",
-  "data": {
-    "bboxes": [[80, 3, 98, 21], [56, 6, 76, 25]]
-  }
+  "result": [
+    [
+      80,
+      3,
+      98,
+      21
+    ],
+    [
+      56,
+      6,
+      76,
+      25
+    ]
+  ],
+  "processing_time": 0.012
 }
 ```
 
-### 4. `/slide-match` - Slide Matching (Algorithm 1)
+### 4. `/slide_match` - Slide Matching (Algorithm 1)
 
 Match a small slide image with its position in the background image.
 
@@ -108,17 +114,21 @@ Match a small slide image with its position in the background image.
 **Response:**
 ```json
 {
-  "code": 200,
-  "msg": "success",
-  "data": {
-    "target": [215, 45, 261, 91],
+  "result": {
+    "target": [
+      215,
+      45,
+      261,
+      91
+    ],
     "target_x": 0,
     "target_y": 45
-  }
+  },
+  "processing_time": 0.012
 }
 ```
 
-### 5. `/slide-comparison` - Slide Comparison (Algorithm 2)
+### 5. `/slide_comparison` - Slide Comparison (Algorithm 2)
 
 Compare two images to find the slide position.
 
@@ -135,12 +145,13 @@ Compare two images to find the slide position.
 **Response:**
 ```json
 {
-  "code": 200,
-  "msg": "success",
-  "data": {
-    "x": 144,
-    "y": 76
-  }
+  "result": {
+    "target": [
+      144,
+      76
+    ]
+  },
+  "processing_time": 0.012
 }
 ```
 

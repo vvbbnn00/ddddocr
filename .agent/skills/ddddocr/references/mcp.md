@@ -161,7 +161,7 @@ Call a tool.
     "content": [
       {
         "type": "text",
-        "text": "{\"probability\":null,\"text\":\"等于？\"}"
+        "text": "{\"result\":\"等于？\",\"processing_time\":0.012}"
       }
     ],
     "isError": false
@@ -193,7 +193,7 @@ Call a tool.
     "content": [
       {
         "type": "text",
-        "text": "{\"bboxes\":[[80,3,98,21],[56,6,76,25]]}"
+        "text": "{\"result\":[[80,3,98,21],[56,6,76,25]],\"processing_time\":0.012}"
       }
     ],
     "isError": false

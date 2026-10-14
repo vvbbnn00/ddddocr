@@ -20,15 +20,12 @@ download-binaries = ["ort/download-binaries"]
 
 [dependencies]
 # 推理与数值计算，删除 Windows DML 以增加兼容性
-ort = { git = "https://github.com/86maid/ort.git", default-features = false, features = [
+ort = { git = "https://github.com/86maid/ort.git", rev = "5f1a53df1ec78dfabf02c5b7c71ecb967e21cf72", default-features = false, features = [
   "ndarray",
   "half",
   "copy-dylibs",
 ] }
 ndarray = "0.15"
-
-# 静态变量
-lazy_static = "1.5.0"
 
 # 序列化 / 反序列化
 serde = { version = "1.0", features = ["derive"] }
@@ -38,8 +35,8 @@ serde_json = "1.0"
 anyhow = "1.0"
 
 # 图像处理
-image = "0.25"
-imageproc = "0.25.0"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
+imageproc = { version = "0.25.0", default-features = false }
 
 # 加密 / 哈希
 sha256 = "1.6"
@@ -53,9 +50,6 @@ salvo = { version = "0.85", features = [
   "acme",
   "logging",
 ] }
-salvo_extra = { version = "0.85.0", default-features = false, features = [
-  "logging",
-] }
 
 # 日志
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -67,13 +61,7 @@ clap = { version = "4.5", features = ["derive"] }
 # 异步运行时
 tokio = { version = "1.48", features = ["full"] }
 
-# 缓存
-lru = "0.16"
 bytes = "1.11"
-async-trait = "0.1"
-
-# ansi
-enable-ansi-support = "0.3"
-
-# mcp
-rmcp = { version = "0.12.0", features = ["server"] }
+multer = "3"
+http-body-util = "0.1"
+futures-util = "0.3"

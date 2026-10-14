@@ -96,7 +96,7 @@ Match slide images with background positions.
 - Slide captcha verification
 - Image positioning
 
-**Endpoints:** `POST /slide-match`, `POST /slide-comparison`
+**Endpoints:** `POST /slide_match`, `POST /slide_comparison`
 
 ## MCP Protocol
 
@@ -120,8 +120,8 @@ The service also provides a REST API:
 |----------|--------|-------------|
 | `/ocr` | POST | OCR recognition |
 | `/det` | POST | Object detection |
-| `/slide-match` | POST | Slide matching |
-| `/slide-comparison` | POST | Slide comparison |
+| `/slide_match` | POST | Slide matching |
+| `/slide_comparison` | POST | Slide comparison |
 | `/status` | GET | Service status |
 | `/docs` | GET | Swagger UI documentation |
 
@@ -165,7 +165,7 @@ with open("target.png", "rb") as f:
 with open("background.png", "rb") as f:
     bg_b64 = base64.b64encode(f.read()).decode()
 
-response = requests.post("http://127.0.0.1:8000/slide-match", json={
+response = requests.post("http://127.0.0.1:8000/slide_match", json={
     "target_image": target_b64,
     "background_image": bg_b64,
     "simple_target": True
@@ -206,11 +206,12 @@ curl http://127.0.0.1:8000/status
 Response:
 ```json
 {
-  "code": 200,
-  "msg": "success",
-  "data": {
-    "service_status": "running",
-    "enabled_features": ["ocr", "det", "slide", "mcp"]
-  }
+  "service_status": "running",
+  "enabled_features": [
+    "ocr",
+    "det",
+    "slide",
+    "mcp"
+  ]
 }
 ```

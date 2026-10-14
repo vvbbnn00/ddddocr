@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import sys
-import base64
 import argparse
 from pathlib import Path
 
@@ -14,28 +13,21 @@ def ocr_recognition(image_path, endpoint="http://127.0.0.1:8000/ocr", color_filt
         print(f"Error: Image file not found: {image_path}", file=sys.stderr)
         sys.exit(1)
     
-    with open(image_path, "rb") as f:
-        image_b64 = base64.b64encode(f.read()).decode()
-    
-    payload = {"image": image_b64}
-    
+    parameters = {}
     if color_filter:
-        payload["color_filter"] = color_filter
-    
-    if charset_range:
-        payload["charset_range"] = charset_range
-    
+        parameters["color_filter"] = color_filter
+    if charset_range is not None:
+        parameters["charset_range"] = charset_range
+
     try:
-        response = requests.post(endpoint, json=payload, timeout=30)
+        response = requests.post(
+            endpoint, data=image_path.read_bytes(), params=parameters,
+            headers={"Content-Type": "application/octet-stream"}, timeout=30,
+        )
         response.raise_for_status()
         result = response.json()
         
-        if result.get("code") == 200:
-            data = result.get("data", {})
-            return data
-        else:
-            print(f"Error: {result.get('msg', 'Unknown error')}", file=sys.stderr)
-            sys.exit(1)
+        return result["result"]
     except requests.exceptions.RequestException as e:
         print(f"Error: Failed to connect to ddddocr service: {e}", file=sys.stderr)
         print(f"Make sure the service is running: python scripts/start_ddddocr.py", file=sys.stderr)
@@ -60,11 +52,9 @@ def main():
     )
     
     if args.text_only:
-        print(result.get("text", ""))
+        print(result)
     else:
-        print(f"Text: {result.get('text', '')}")
-        if result.get("probability"):
-            print(f"Probability: {result['probability']}")
+        print(f"Text: {result}")
 
 
 if __name__ == "__main__":
