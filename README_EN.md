@@ -301,6 +301,8 @@ println!("{:?}", res);
 
 # ocr_api_server example
 
+All recognition endpoints return `result` and `processing_time`. See [HTTP API and deployment](./API.md) for Docker, binary uploads, and concurrency limits.
+
 ## Running method
 ```sh
 Usage: ddddocr.exe [OPTIONS]
@@ -321,11 +323,11 @@ Options:
     --slide
         Enable slider and pit recognition.
     --ocr-charset-range <OCR_CHARSET_RANGE>
-        Global default character set, used for probability recognition. If the API does not provide a character set, this parameter is used. When the value is 0~7, it means selecting the built-in character set. Other values indicate a custom character set, such as "0123456789+-x/=". If not set, the complete character set is used without restrictions.
+        Global default character set, used for OCR recognition. If the API does not provide a character set, this parameter is used. When the value is 0~7, it means selecting the built-in character set. Other values indicate a custom character set, such as "0123456789+-x/=". If not set, the complete character set is used without restrictions.
     --ocr-path <OCR_PATH>
-        Content recognition model and character set path. If you have enabled the inline-model option of features (enabled by default), you don't need to care about this option unless you want to use a custom model. The model model/common.onnx and the character set model/common.json must have the same name. [default: model/common.onnx]
+        Content recognition model and character set path. If you have enabled the inline-model option of features (enabled by default), you don't need to care about this option unless you want to use a custom model. The model model/common.onnx and the character set model/common.json must have the same name.
     --det-path <DET_PATH>
-        Target detection model path. If you have enabled the `inline-model` option for features (enabled by default), you don't need to worry about this option unless you want to use a custom model. [default: model/common_det.onnx]
+        Target detection model path. If you have enabled the `inline-model` option for features (enabled by default), you don't need to worry about this option unless you want to use a custom model.
     --acme <ACME>
         Enter your domain name to automatically obtain SSL certificates, i.e., HTTPS support.
     -h, --help
@@ -347,8 +349,8 @@ ddddocr.exe --help
 | ------------------- | ------ | --------------------------- |
 | `/ocr`              | POST   | Perform OCR recognition     |
 | `/det`              | POST   | Perform object detection    |
-| `/slide-match`      | POST   | Slider matching algorithm   |
-| `/slide-comparison` | POST   | Slider comparison algorithm |
+| `/slide_match`      | POST   | Slider matching algorithm   |
+| `/slide_comparison` | POST   | Slider comparison algorithm |
 | `/status`           | GET    | Get current service status  |
 | `/docs`             | GET    | Swagger UI documentation    |
 
@@ -359,7 +361,7 @@ ddddocr.exe --help
 
 curl -X GET "http://127.0.0.1:8000/status"
 
-{"code":200,"msg":"success","data":{"service_status":"running","enabled_features":["ocr","det","slide"]}}
+{"service_status":"running","enabled_features":["ocr","det","slide"]}
 
 --> 200 POST /ocr
 
@@ -367,7 +369,7 @@ curl -X POST "http://127.0.0.1:8000/ocr"
 -H "Content-Type: application/json"
 -d '{"image": "base64 image"}'
 
-{"code":200,"msg":"success","data":{"text":"What is nine times six?","probability":null}}
+{"result":"What is nine times six?","processing_time":0.012}
 
 --> 200 POST /det
 
@@ -375,23 +377,23 @@ curl -X POST "http://127.0.0.1:8000/det"
 -H "Content-Type: application/json"
 -d '{"image": "base64 image"}'
 
-{"code":200,"msg":"success","data":{"bboxes":[[80,3,98,21],[56,6,76,25],[31,7,51,26],[2,2,21,22],[100,0,127,18]]}}
+{"result":[[80,3,98,21],[56,6,76,25],[31,7,51,26],[2,2,21,22],[100,0,127,18]],"processing_time":0.012}
 
---> 200 POST /slide-match
+--> 200 POST /slide_match
 
-curl -X POST "http://127.0.0.1:8000/slide-match"
+curl -X POST "http://127.0.0.1:8000/slide_match"
 -H "Content-Type: application/json"
 -d '{"target_image": "base64 image", "background_image": "base64 image", "simple_target": true}'
 
-{"code":200,"msg":"success","data":{"target":[215,45,261,91],"target_x":0,"target_y":45}}
+{"result":{"target":[215,45,261,91],"target_x":0,"target_y":45},"processing_time":0.012}
 
---> 200 POST /slide-comparison
+--> 200 POST /slide_comparison
 
-curl -X POST "http://127.0.0.1:8000/slide-comparison"
+curl -X POST "http://127.0.0.1:8000/slide_comparison"
 -H "Content-Type: application/json"
 -d '{"target_image": "base64 image", "background_image": "base64 image"}'
 
-{"code":200,"msg":"success","data":{"x":144,"y":76}}
+{"result":{"target":[144,76]},"processing_time":0.012}
 ```
 ## MCP Protocol Support
 
@@ -426,7 +428,7 @@ Methods: `initialize` `tools/list` `tools/call`
     "content": [
         {
             "type": "text",
-            "text": "{\"probability\":null,\"text\":\"Equals?\"}"
+            "text": "{\"result\":\"Equals?\",\"processing_time\":0.012}"
         }
     ],
     "isError": false

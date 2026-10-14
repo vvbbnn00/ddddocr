@@ -1,0 +1,11 @@
+.git
+.agent
+.agents
+.codex
+target
+image
+tests
+*.md
+*.py
+*.log
+.DS_Store

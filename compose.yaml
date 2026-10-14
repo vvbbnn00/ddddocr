@@ -1,0 +1,26 @@
+services:
+  ddddocr:
+    build: .
+    ports:
+      - "${DDDDOCR_PORT:-8000}:8000"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      RUST_LOG: "${RUST_LOG:-warn}"
+    command:
+      - --address
+      - 0.0.0.0:8000
+      - --max-concurrency
+      - "${DDDDOCR_MAX_CONCURRENCY:-4}"
+      - --inference-threads
+      - "${DDDDOCR_INFERENCE_THREADS:-1}"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

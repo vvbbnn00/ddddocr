@@ -301,6 +301,8 @@ println!("{:?}", res);
 
 # ocr_api_server 例子
 
+所有识别接口统一返回 `result` 和 `processing_time`。Docker 部署、二进制上传及并发限制见 [HTTP API 与部署文档](./API.md)。
+
 ## 运行方式
 ```sh
 Usage: ddddocr.exe [OPTIONS]
@@ -321,11 +323,11 @@ Options:
       --slide
           开启滑块和坑位识别。
       --ocr-charset-range <OCR_CHARSET_RANGE>
-          全局默认字符集，用于概率识别， 如果 API 未提供字符集，则使用此参数， 当值为 0~7 时，表示选择内置字符集， 其他值表示自定义字符集，例如 "0123456789+-x/="， 如果未设置，则使用完整字符集，不做限制。
+          全局默认字符集，用于 OCR 识别， 如果 API 未提供字符集，则使用此参数， 当值为 0~7 时，表示选择内置字符集， 其他值表示自定义字符集，例如 "0123456789+-x/="， 如果未设置，则使用完整字符集，不做限制。
       --ocr-path <OCR_PATH>
-          内容识别模型以及字符集路径， 如果你开启了 features 的 inline-model 选项（默认开启），则不用管这个选项，除非你想使用自定义模型， 模型 model/common.onnx 和字符集 model/common.json 要同名。 [default: model/common.onnx]
+          内容识别模型以及字符集路径， 如果你开启了 features 的 inline-model 选项（默认开启），则不用管这个选项，除非你想使用自定义模型， 模型 model/common.onnx 和字符集 model/common.json 要同名。
       --det-path <DET_PATH>
-          目标检测模型路径， 如果你开启了 features 的 inline-model 选项（默认开启），则不用管这个选项，除非你想使用自定义模型。 [default: model/common_det.onnx]
+          目标检测模型路径， 如果你开启了 features 的 inline-model 选项（默认开启），则不用管这个选项，除非你想使用自定义模型。
       --acme <ACME>
           输入你的域名，自动获取 SSL 证书， 即 https 的支持。
   -h, --help
@@ -347,8 +349,8 @@ ddddocr.exe --help
 | ------------------- | ---- | ---------------- |
 | `/ocr`              | POST | 执行OCR识别      |
 | `/det`              | POST | 执行目标检测     |
-| `/slide-match`      | POST | 滑块匹配算法     |
-| `/slide-comparison` | POST | 滑块比较算法     |
+| `/slide_match`      | POST | 滑块匹配算法     |
+| `/slide_comparison` | POST | 滑块比较算法     |
 | `/status`           | GET  | 获取当前服务状态 |
 | `/docs`             | GET  | Swagger UI 文档  |
 
@@ -359,7 +361,7 @@ ddddocr.exe --help
 
   curl -X GET "http://127.0.0.1:8000/status"
 
-  {"code":200,"msg":"success","data":{"service_status":"running","enabled_features":["ocr","det","slide"]}}
+  {"service_status":"running","enabled_features":["ocr","det","slide"]}
 
 --> 200 POST /ocr
 
@@ -367,7 +369,7 @@ ddddocr.exe --help
        -H "Content-Type: application/json"  
        -d '{"image": "base64 image"}'       
 
-  {"code":200,"msg":"success","data":{"text":"九乘六等于？","probability":null}}
+  {"result":"九乘六等于？","processing_time":0.012}
 
 --> 200 POST /det
 
@@ -375,23 +377,23 @@ ddddocr.exe --help
        -H "Content-Type: application/json"
        -d '{"image": "base64 image"}'
 
-  {"code":200,"msg":"success","data":{"bboxes":[[80,3,98,21],[56,6,76,25],[31,7,51,26],[2,2,21,22],[100,0,127,18]]}}
+  {"result":[[80,3,98,21],[56,6,76,25],[31,7,51,26],[2,2,21,22],[100,0,127,18]],"processing_time":0.012}
 
---> 200 POST /slide-match
+--> 200 POST /slide_match
 
-  curl -X POST "http://127.0.0.1:8000/slide-match"
+  curl -X POST "http://127.0.0.1:8000/slide_match"
        -H "Content-Type: application/json"
        -d '{"target_image": "base64 image", "background_image": "base64 image", "simple_target": true}'
 
-  {"code":200,"msg":"success","data":{"target":[215,45,261,91],"target_x":0,"target_y":45}}
+  {"result":{"target":[215,45,261,91],"target_x":0,"target_y":45},"processing_time":0.012}
 
---> 200 POST /slide-comparison
+--> 200 POST /slide_comparison
 
-  curl -X POST "http://127.0.0.1:8000/slide-comparison"
+  curl -X POST "http://127.0.0.1:8000/slide_comparison"
        -H "Content-Type: application/json"
        -d '{"target_image": "base64 image", "background_image": "base64 image"}'
 
-  {"code":200,"msg":"success","data":{"x":144,"y":76}}
+  {"result":{"target":[144,76]},"processing_time":0.012}
 ```
 ## MCP 协议支持
 
@@ -426,7 +428,7 @@ ddddocr.exe --help
     "content": [
       {
         "type": "text",
-        "text": "{\"probability\":null,\"text\":\"等于？\"}"
+        "text": "{\"result\":\"等于？\",\"processing_time\":0.012}"
       }
     ],
     "isError": false
