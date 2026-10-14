@@ -1,3 +1,67 @@
+/// Limits applied before decoding untrusted images.
+pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_IMAGE_SIDE: u32 = 4096;
+
+fn load_image(data: &[u8]) -> anyhow::Result<image::DynamicImage> {
+    anyhow::ensure!(
+        !data.is_empty() && data.len() <= MAX_IMAGE_BYTES,
+        "image must contain 1..=8 MiB"
+    );
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_SIDE);
+    limits.max_image_height = Some(MAX_IMAGE_SIDE);
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    reader.limits(limits);
+    Ok(reader.decode()?)
+}
+
+fn check_match_work(
+    target: &image::GrayImage,
+    background: &image::GrayImage,
+) -> anyhow::Result<()> {
+    let positions = u64::from(background.width() - target.width() + 1)
+        * u64::from(background.height() - target.height() + 1);
+    anyhow::ensure!(
+        positions * u64::from(target.width()) * u64::from(target.height()) <= 100_000_000,
+        "template matching exceeds the 100 million pixel-comparison limit"
+    );
+    Ok(())
+}
+
+fn decode_ctc(indices: impl IntoIterator<Item = usize>, charset: &[String]) -> String {
+    let mut previous = None;
+    let mut text = String::new();
+    for index in indices {
+        if previous != Some(index) && index != 0 {
+            if let Some(character) = charset.get(index) {
+                text.push_str(character);
+            }
+        }
+        previous = Some(index);
+    }
+    text
+}
+
+fn softmax(row: &[f32]) -> Vec<f32> {
+    let max = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let mut probabilities: Vec<f32> = row.iter().map(|value| (value - max).exp()).collect();
+    let sum: f64 = probabilities.iter().map(|&value| f64::from(value)).sum();
+    for value in &mut probabilities {
+        *value = (f64::from(*value) / sum) as f32;
+    }
+    probabilities
+}
+
+fn cpu_session(model: &[u8], threads: usize) -> anyhow::Result<ort::Session> {
+    anyhow::ensure!(threads > 0, "inference threads must be positive");
+    Ok(ort::Session::builder()?
+        .with_intra_threads(threads)?
+        .with_inter_threads(1)?
+        .with_parallel_execution(false)?
+        .commit_from_memory(model)?)
+}
+
 /// 初始化内容识别。
 #[cfg(feature = "inline-model")]
 pub fn ddddocr_classification() -> anyhow::Result<Ddddocr<'static>> {
@@ -78,8 +142,8 @@ where
     I1: AsRef<[u8]>,
     I2: AsRef<[u8]>,
 {
-    let target_image = image::load_from_memory(target_image.as_ref())?;
-    let background_image = image::load_from_memory(background_image.as_ref())?;
+    let target_image = load_image(target_image.as_ref())?;
+    let background_image = load_image(background_image.as_ref())?;
 
     anyhow::ensure!(
         background_image.width() >= target_image.width(),
@@ -125,19 +189,18 @@ where
         }
     }
 
-    let cropped_image = if start_x > end_x || start_y > end_y {
-        // 没有任何不透明的像素
-        target_image
-    } else {
-        image::imageops::crop_imm(
-            &target_image,
-            start_x,
-            start_y,
-            end_x - start_x + 1,
-            end_y - start_y + 1,
-        )
-        .to_image()
-    };
+    anyhow::ensure!(
+        start_x <= end_x && start_y <= end_y,
+        "target image is fully transparent"
+    );
+    let cropped_image = image::imageops::crop_imm(
+        &target_image,
+        start_x,
+        start_y,
+        end_x - start_x + 1,
+        end_y - start_y + 1,
+    )
+    .to_image();
 
     // 图片转换到灰度图
     let target_image = image::imageops::grayscale(&cropped_image);
@@ -146,8 +209,10 @@ where
     // 接着，使用 match_template 函数进行模板匹配，得到匹配结果矩阵
     // 然后使用 find_extremes 函数找到结果矩阵中的最大值和最小值
     // 并得到最大值所在的位置 loc，根据目标图片的大小和 loc 计算出目标物体的位置信息
+    let background_image = background_image.to_luma8();
+    check_match_work(&target_image, &background_image)?;
     let target_image = imageproc::edges::canny(&target_image, 100.0, 200.0);
-    let background_image = imageproc::edges::canny(&background_image.to_luma8(), 100.0, 200.0);
+    let background_image = imageproc::edges::canny(&background_image, 100.0, 200.0);
     let result =
         imageproc::template_matching::find_extremes(&imageproc::template_matching::match_template(
             &background_image,
@@ -189,8 +254,8 @@ where
     I1: AsRef<[u8]>,
     I2: AsRef<[u8]>,
 {
-    let target_image = image::load_from_memory(target_image.as_ref())?;
-    let background_image = image::load_from_memory(background_image.as_ref())?;
+    let target_image = load_image(target_image.as_ref())?;
+    let background_image = load_image(background_image.as_ref())?;
 
     anyhow::ensure!(
         background_image.width() >= target_image.width(),
@@ -206,8 +271,11 @@ where
     // 接着，使用 match_template 函数进行模板匹配，得到匹配结果矩阵
     // 然后使用 find_extremes 函数找到结果矩阵中的最大值和最小值
     // 并得到最大值所在的位置 loc，根据目标图片的大小和 loc 计算出目标物体的位置信息
-    let target_image = imageproc::edges::canny(&target_image.to_luma8(), 100.0, 200.0);
-    let background_image = imageproc::edges::canny(&background_image.to_luma8(), 100.0, 200.0);
+    let target_image = target_image.to_luma8();
+    let background_image = background_image.to_luma8();
+    check_match_work(&target_image, &background_image)?;
+    let target_image = imageproc::edges::canny(&target_image, 100.0, 200.0);
+    let background_image = imageproc::edges::canny(&background_image, 100.0, 200.0);
     let result =
         imageproc::template_matching::find_extremes(&imageproc::template_matching::match_template(
             &background_image,
@@ -249,8 +317,8 @@ where
     I1: AsRef<[u8]>,
     I2: AsRef<[u8]>,
 {
-    let target_image = image::load_from_memory(target_image.as_ref())?;
-    let background_image = image::load_from_memory(background_image.as_ref())?;
+    let target_image = load_image(target_image.as_ref())?;
+    let background_image = load_image(background_image.as_ref())?;
 
     anyhow::ensure!(
         target_image.width() == background_image.width()
@@ -258,38 +326,27 @@ where
         "图片尺寸不相等"
     );
 
-    let image = image::RgbImage::from_vec(
-        target_image.width(),
-        target_image.height(),
-        target_image
-            .as_bytes()
-            .iter()
-            .zip(background_image.as_bytes().iter())
-            .map(|(a, b)| if a.abs_diff(*b) > 80 { 255 } else { 0 })
-            .collect(),
-    )
-    .unwrap();
-
+    let target = target_image.to_rgb8();
+    let background = background_image.to_rgb8();
     let mut start_x = 0;
     let mut start_y = 0;
-
-    for i in 0..image.width() {
+    for x in 0..target.width() {
         let mut count = 0;
-
-        for j in 0..image.height() {
-            let pixel = image[(i, j)];
-
-            if pixel != image::Rgb([0, 0, 0]) {
+        let mut first_y = None;
+        for y in 0..target.height() {
+            if target[(x, y)]
+                .0
+                .iter()
+                .zip(background[(x, y)].0.iter())
+                .any(|(a, b)| a.abs_diff(*b) > 80)
+            {
+                first_y.get_or_insert(y);
                 count += 1;
             }
-
-            if count >= 5 && start_y == 0 {
-                start_y = j - 5;
-            }
         }
-
         if count >= 5 {
-            start_x = i + 2;
+            start_x = (x + 2).min(target.width() - 1);
+            start_y = first_y.unwrap_or(0);
             break;
         }
     }
@@ -333,11 +390,15 @@ fn png_rgba_black_preprocess(image: &image::DynamicImage) -> image::DynamicImage
         for x in 0..width {
             let rgba_pixel = image::GenericImageView::get_pixel(image, x, y);
 
-            let rgb_pixel = if rgba_pixel[3] == 0 {
-                image::Rgba([255, 255, 255, 255])
-            } else {
-                image::Rgba([rgba_pixel[0], rgba_pixel[1], rgba_pixel[2], rgba_pixel[3]])
-            };
+            let alpha = u16::from(rgba_pixel[3]);
+            let composite =
+                |v: u8| ((u16::from(v) * alpha + 255 * (255 - alpha) + 127) / 255) as u8;
+            let rgb_pixel = image::Rgba([
+                composite(rgba_pixel[0]),
+                composite(rgba_pixel[1]),
+                composite(rgba_pixel[2]),
+                255,
+            ]);
 
             image::GenericImage::put_pixel(&mut new_image, x, y, rgb_pixel);
         }
@@ -410,19 +471,23 @@ pub struct CharacterProbability {
 impl CharacterProbability {
     pub fn get_text(&mut self) -> &str {
         self.text.get_or_insert_with(|| {
-            let mut s = String::new();
-
-            for i in &self.probability {
-                let (n, _) = i
+            // A blank resets CTC repetition, but is not part of the text.
+            let mut previous = None;
+            let mut text = String::new();
+            for row in &self.probability {
+                let index = row
                     .iter()
                     .enumerate()
                     .max_by(|(_, a), (_, b)| a.total_cmp(b))
-                    .unwrap();
-
-                s += &self.charset[n];
+                    .map(|(i, _)| i);
+                if index != previous {
+                    if let Some(character) = index.and_then(|i| self.charset.get(i)) {
+                        text.push_str(character);
+                    }
+                }
+                previous = index;
             }
-
-            s
+            text
         })
     }
 
@@ -507,44 +572,6 @@ impl MapBBox for Vec<BBox> {
             .map(|v| vec![v.x1, v.y1, v.x2, v.y2])
             .collect::<Vec<_>>()
     }
-}
-
-lazy_static::lazy_static! {
-    static ref _STATIC: (Vec<u32>, Vec<u32>) = {
-        let mut grids = Vec::new();
-        let mut expanded_strides = Vec::new();
-        let hsizes = STRIDES.iter().map(|v| MODEL_HEIGHT / v).collect::<Vec<_>>();
-        let wsizes = STRIDES.iter().map(|v| MODEL_WIDTH / v).collect::<Vec<_>>();
-
-        fn meshgrid(x: u32, y: u32) -> Vec<u32> {
-            let mut result = vec![0; (x * y * 2) as usize];
-
-            for i in 0..x {
-                for j in 0..y {
-                    let index = ((i * x + j) * 2) as usize;
-                    result[index] = j;
-                    result[index + 1] = i;
-                }
-            }
-            result
-        }
-
-        for (i, v) in STRIDES.iter().enumerate() {
-            let hsize = hsizes[i];
-            let wsize = wsizes[i];
-            let grid = meshgrid(hsize, wsize);
-            let expanded_stride = vec![*v; (hsize * wsize) as usize];
-
-            grids.extend(grid);
-            expanded_strides.extend(expanded_stride);
-        }
-
-        (grids, expanded_strides)
-    };
-
-    static ref GRIDS: Vec<u32> = unsafe { std::mem::transmute_copy(&_STATIC.0) };
-
-    static ref EXPANDED_STRIDES: Vec<u32> =  unsafe { std::mem::transmute_copy(&_STATIC.1) };
 }
 
 const NMS_THR: f32 = 0.45;
@@ -679,12 +706,14 @@ impl<T: AsRef<str>> From<T> for Color {
     }
 }
 
+pub type HsvRange = ((u8, u8, u8), (u8, u8, u8));
+
 pub trait IntoHsvRange {
-    fn into_hsv_ranges(self) -> Vec<((u8, u8, u8), (u8, u8, u8))>;
+    fn into_hsv_ranges(self) -> Vec<HsvRange>;
 }
 
 impl IntoHsvRange for Color {
-    fn into_hsv_ranges(self) -> Vec<((u8, u8, u8), (u8, u8, u8))> {
+    fn into_hsv_ranges(self) -> Vec<HsvRange> {
         match self {
             Color::Red => vec![
                 ((0, 50, 50), (10, 255, 255)),
@@ -709,7 +738,7 @@ impl IntoHsvRange for Color {
 pub enum ColorFilter {
     /// HSV 范围，每个元素是一个 (min_hsv, max_hsv) 的元组。
     /// 例如: `[((0, 50, 50), (10, 255, 255))]`。
-    HSVRanges(Vec<((u8, u8, u8), (u8, u8, u8))>),
+    HSVRanges(Vec<HsvRange>),
 
     /// 颜色范围，例如: `["red", "blue"]`。
     ColorRanges(Vec<Color>),
@@ -719,7 +748,7 @@ pub enum ColorFilter {
 }
 
 impl IntoHsvRange for ColorFilter {
-    fn into_hsv_ranges(self) -> Vec<((u8, u8, u8), (u8, u8, u8))> {
+    fn into_hsv_ranges(self) -> Vec<HsvRange> {
         match self {
             ColorFilter::HSVRanges(v) => v,
             ColorFilter::ColorRanges(v) => ColorFilter::from(v).into_hsv_ranges(),
@@ -729,25 +758,25 @@ impl IntoHsvRange for ColorFilter {
 }
 
 impl IntoHsvRange for &str {
-    fn into_hsv_ranges(self) -> Vec<((u8, u8, u8), (u8, u8, u8))> {
+    fn into_hsv_ranges(self) -> Vec<HsvRange> {
         Color::from(self).into_hsv_ranges()
     }
 }
 
 impl IntoHsvRange for String {
-    fn into_hsv_ranges(self) -> Vec<((u8, u8, u8), (u8, u8, u8))> {
+    fn into_hsv_ranges(self) -> Vec<HsvRange> {
         Color::from(self).into_hsv_ranges()
     }
 }
 
 impl IntoHsvRange for &String {
-    fn into_hsv_ranges(self) -> Vec<((u8, u8, u8), (u8, u8, u8))> {
+    fn into_hsv_ranges(self) -> Vec<HsvRange> {
         Color::from(self).into_hsv_ranges()
     }
 }
 
 impl IntoHsvRange for ((u8, u8, u8), (u8, u8, u8)) {
-    fn into_hsv_ranges(self) -> Vec<((u8, u8, u8), (u8, u8, u8))> {
+    fn into_hsv_ranges(self) -> Vec<HsvRange> {
         vec![self]
     }
 }
@@ -854,8 +883,8 @@ impl From<Vec<Color>> for ColorFilter {
     }
 }
 
-impl From<Vec<((u8, u8, u8), (u8, u8, u8))>> for ColorFilter {
-    fn from(value: Vec<((u8, u8, u8), (u8, u8, u8))>) -> Self {
+impl From<Vec<HsvRange>> for ColorFilter {
+    fn from(value: Vec<HsvRange>) -> Self {
         ColorFilter::HSVRanges(value)
     }
 }
@@ -866,96 +895,45 @@ impl ColorFilter {
     where
         I: AsRef<[u8]>,
     {
-        let image = image::load_from_memory(image.as_ref())?.to_rgb8();
-        let (width, height) = image.dimensions();
-        let mut array = ndarray::Array3::<u8>::zeros((height as usize, width as usize, 3));
+        Ok(self.filter_decoded(load_image(image.as_ref())?))
+    }
 
-        for (x, y, pixel) in image.enumerate_pixels() {
-            let y = y as usize;
-            let x = x as usize;
-            array[[y, x, 0]] = pixel[0];
-            array[[y, x, 1]] = pixel[1];
-            array[[y, x, 2]] = pixel[2];
-        }
-
-        let mut hsv = ndarray::Array3::<u8>::zeros((height as usize, width as usize, 3));
-
-        for y in 0..height as usize {
-            for x in 0..width as usize {
-                let r = array[[y, x, 0]] as f32 / 255.0;
-                let g = array[[y, x, 1]] as f32 / 255.0;
-                let b = array[[y, x, 2]] as f32 / 255.0;
-                let max = r.max(g).max(b);
-                let min = r.min(g).min(b);
-                let v = max;
-                let delta = max - min;
-                let s = if max == 0.0 { 0.0 } else { delta / max };
-                let h_deg = if delta == 0.0 {
-                    0.0
-                } else if max == r {
-                    60.0 * (((g - b) / delta) % 6.0)
-                } else if max == g {
-                    60.0 * (((b - r) / delta) + 2.0)
-                } else {
-                    60.0 * (((r - g) / delta) + 4.0)
-                };
-
-                let h_deg = if h_deg < 0.0 { h_deg + 360.0 } else { h_deg };
-
-                hsv[[y, x, 0]] = (h_deg / 2.0).round().min(180.0) as u8;
-                hsv[[y, x, 1]] = (s * 255.0).round().min(255.0) as u8;
-                hsv[[y, x, 2]] = (v * 255.0).round().min(255.0) as u8;
+    fn filter_decoded(&self, image: image::DynamicImage) -> image::DynamicImage {
+        let mut image = image.to_rgb8();
+        let ranges = self.clone().into_hsv_ranges();
+        for pixel in image.pixels_mut() {
+            let r = f32::from(pixel[0]) / 255.0;
+            let g = f32::from(pixel[1]) / 255.0;
+            let b = f32::from(pixel[2]) / 255.0;
+            let max = r.max(g).max(b);
+            let delta = max - r.min(g).min(b);
+            let saturation = if max == 0.0 { 0.0 } else { delta / max };
+            let hue = if delta == 0.0 {
+                0.0
+            } else if max == r {
+                60.0 * ((g - b) / delta).rem_euclid(6.0)
+            } else if max == g {
+                60.0 * ((b - r) / delta + 2.0)
+            } else {
+                60.0 * ((r - g) / delta + 4.0)
+            };
+            let hsv = [
+                (hue / 2.0).round() as u8,
+                (saturation * 255.0).round() as u8,
+                (max * 255.0).round() as u8,
+            ];
+            if !ranges.iter().any(|(lo, hi)| {
+                hsv[0] >= lo.0
+                    && hsv[0] <= hi.0
+                    && hsv[1] >= lo.1
+                    && hsv[1] <= hi.1
+                    && hsv[2] >= lo.2
+                    && hsv[2] <= hi.2
+            }) {
+                *pixel = image::Rgb([255, 255, 255]);
             }
         }
-
-        let mut mask = ndarray::Array2::<bool>::from_elem((height as usize, width as usize), false);
-
-        let ranges = match self {
-            ColorFilter::HSVRanges(v) => v,
-            ColorFilter::ColorRanges(v) => &v
-                .iter()
-                .flat_map(|v| v.into_hsv_ranges())
-                .collect::<Vec<_>>(),
-            ColorFilter::Color(v) => &v.into_hsv_ranges(),
-        };
-
-        for (lower, upper) in ranges {
-            for y in 0..height as usize {
-                for x in 0..width as usize {
-                    let h = hsv[[y, x, 0]];
-                    let s = hsv[[y, x, 1]];
-                    let v = hsv[[y, x, 2]];
-
-                    if h >= lower.0
-                        && h <= upper.0
-                        && s >= lower.1
-                        && s <= upper.1
-                        && v >= lower.2
-                        && v <= upper.2
-                    {
-                        mask[[y, x]] = true;
-                    }
-                }
-            }
-        }
-
-        let mut result: image::RgbImage = image::ImageBuffer::new(width, height);
-
-        for y in 0..height {
-            for x in 0..width {
-                let yi = y as usize;
-                let xi = x as usize;
-                let pixel = if mask[[yi, xi]] {
-                    image::Rgb([array[[yi, xi, 0]], array[[yi, xi, 1]], array[[yi, xi, 2]]])
-                } else {
-                    image::Rgb([255, 255, 255])
-                };
-
-                result.put_pixel(x, y, pixel);
-            }
-        }
-
-        Ok(image::DynamicImage::ImageRgb8(result))
+        image::DynamicImage::ImageRgb8(image)
     }
 }
 
@@ -966,9 +944,6 @@ pub struct Ddddocr<'a> {
     charset: Option<std::borrow::Cow<'a, Charset>>,
     charset_range: Vec<String>,
 }
-
-unsafe impl<'a> Send for Ddddocr<'a> {}
-unsafe impl<'a> Sync for Ddddocr<'a> {}
 
 /// 因为自带模型和自定义模型的参数不同，所以在创建模型的时候会自动判断是否为自定义模型。
 impl<'a> Ddddocr<'a> {
@@ -1013,9 +988,25 @@ impl<'a> Ddddocr<'a> {
     where
         MODEL: AsRef<[u8]>,
     {
+        Self::new_with_threads(model, charset, 1)
+    }
+
+    pub fn new_with_threads<MODEL: AsRef<[u8]>>(
+        model: MODEL,
+        charset: Charset,
+        threads: usize,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            matches!(charset.channel, 1 | 3)
+                && charset.image[1] > 0
+                && charset.image[1] <= 4096
+                && (charset.image[0] == -1 || (charset.image[0] > 0 && charset.image[0] <= 8192))
+                && !charset.charset.is_empty(),
+            "invalid model charset configuration"
+        );
         Ok(Self {
             diy: is_diy(model.as_ref()),
-            session: ort::Session::builder()?.commit_from_memory(model.as_ref())?,
+            session: cpu_session(model.as_ref(), threads)?,
             charset: Some(std::borrow::Cow::Owned(charset)),
             charset_range: Vec::new(),
         })
@@ -1028,7 +1019,7 @@ impl<'a> Ddddocr<'a> {
     {
         Ok(Self {
             diy: is_diy(model.as_ref()),
-            session: ort::Session::builder()?.commit_from_memory(model.as_ref())?,
+            session: cpu_session(model.as_ref(), 1)?,
             charset: Some(std::borrow::Cow::Borrowed(charset)),
             charset_range: Vec::new(),
         })
@@ -1101,9 +1092,16 @@ impl<'a> Ddddocr<'a> {
     where
         MODEL: AsRef<[u8]>,
     {
+        Self::new_model_with_threads(model, 1)
+    }
+
+    pub fn new_model_with_threads<MODEL: AsRef<[u8]>>(
+        model: MODEL,
+        threads: usize,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             diy: is_diy(model.as_ref()),
-            session: ort::Session::builder()?.commit_from_memory(model.as_ref())?,
+            session: cpu_session(model.as_ref(), threads)?,
             charset: None,
             charset_range: Vec::new(),
         })
@@ -1241,14 +1239,9 @@ impl<'a> Ddddocr<'a> {
             CharsetRange::Charset(v) => return v,
         };
 
-        // 去重 + 补空字符串
-        new_charset = new_charset
-            .into_iter()
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect::<Vec<String>>();
-
-        new_charset.push("".to_string());
+        let mut seen = std::collections::HashSet::new();
+        new_charset.retain(|character| !character.is_empty() && seen.insert(character.clone()));
+        new_charset.push(String::new());
 
         new_charset
     }
@@ -1357,237 +1350,139 @@ impl<'a> Ddddocr<'a> {
     where
         I: AsRef<[u8]>,
     {
-        if self.diy {
-            // 嘿，傻瓜，这里明明写了只能用官方模型，你是故意不看吗？发生 panic 的话自己负责哦！
-            panic!("can only use the official model");
-        }
-
-        let mut _temp = Vec::new();
-        let charset_ranges = match &ranges {
-            Some(v) => 'a: {
-                let new_charset = match v {
-                    CharsetRange::Digit => "0123456789"
-                        .chars()
-                        .map(|v| v.to_string())
-                        .collect::<Vec<String>>(),
-                    CharsetRange::Lowercase => "abcdefghijklmnopqrstuvwxyz"
-                        .chars()
-                        .map(|v| v.to_string())
-                        .collect::<Vec<String>>(),
-                    CharsetRange::Uppercase => "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                        .chars()
-                        .map(|v| v.to_string())
-                        .collect::<Vec<String>>(),
-                    CharsetRange::LowercaseUppercase => {
-                        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                            .chars()
-                            .map(|v| v.to_string())
-                            .collect::<Vec<String>>()
-                    }
-                    CharsetRange::LowercaseDigit => "abcdefghijklmnopqrstuvwxyz0123456789"
-                        .chars()
-                        .map(|v| v.to_string())
-                        .collect::<Vec<String>>(),
-                    CharsetRange::UppercaseDigit => "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-                        .chars()
-                        .map(|v| v.to_string())
-                        .collect::<Vec<String>>(),
-                    CharsetRange::LowercaseUppercaseDigit => {
-                        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-                            .chars()
-                            .map(|v| v.to_string())
-                            .collect::<Vec<String>>()
-                    }
-                    CharsetRange::DefaultCharsetLowercaseUppercaseDigit => {
-                        // 删除小写字母 a-z、大写字母 A-Z、整数 0-9
-                        let delete_range =
-                            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-                                .chars()
-                                .collect::<Vec<char>>();
-
-                        self.charset
-                            .as_ref()
-                            .ok_or(anyhow::anyhow!("only the ocr model can be used"))?
-                            .charset
-                            .clone()
-                            .into_iter()
-                            .filter(|v| v.chars().all(|c| !delete_range.contains(&c)))
-                            .collect::<Vec<String>>()
-                    }
-                    CharsetRange::Other(v) => {
-                        v.chars().map(|v| v.to_string()).collect::<Vec<String>>()
-                    }
-                    CharsetRange::Charset(v) => break 'a v,
-                };
-
-                // 去重
-                _temp = new_charset
-                    .into_iter()
-                    .collect::<std::collections::HashSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<String>>();
-
-                _temp.push("".to_string());
-
-                &_temp
+        anyhow::ensure!(!self.diy, "probability requires an official OCR model");
+        let calculated;
+        let charset_ranges = match ranges {
+            Some(value) => {
+                calculated = self.calc_ranges(value);
+                &calculated
             }
             None => &self.charset_range,
         };
 
-        let image = match filter {
-            Some(v) => v.filter(image.as_ref())?,
-            None => image::load_from_memory(image.as_ref())?,
-        };
-
-        let charset = self.charset.as_ref().unwrap();
-        let word = charset.word;
-        let resize = charset.image;
-        let channel = charset.channel;
-        let charset = &charset.charset;
-
-        // 使用 ANTIALIAS (Lanczos3) 缩放图片
-        let image = if resize[0] == -1 {
-            if word {
-                image.resize_exact(
-                    resize[1] as u32,
-                    resize[1] as u32,
-                    image::imageops::FilterType::Lanczos3,
-                )
-            } else {
-                image.resize_exact(
-                    image.width() * resize[1] as u32 / image.height(),
-                    resize[1] as u32,
-                    image::imageops::FilterType::Lanczos3,
-                )
-            }
-        } else {
-            image.resize_exact(
-                resize[0] as u32,
-                resize[1] as u32,
-                image::imageops::FilterType::Lanczos3,
-            )
-        };
-
-        // 设置图片的通道数为模型所需的通道数
-        let image_bytes = if channel == 1 {
-            image::EncodableLayout::as_bytes(image.to_luma8().as_ref()).to_vec()
-        } else if png_fix {
-            png_rgba_black_preprocess(&image).to_rgb8().to_vec()
-        } else {
-            image.to_rgb8().to_vec()
-        };
-
-        // 图片转换到张量
-        let channel = channel as usize;
-        let width = image.width() as usize;
-        let height = image.height() as usize;
-        let image = ndarray::Array::from_shape_vec((channel, height, width), image_bytes)?;
-        let mut tensor = ndarray::Array::from_shape_vec(
-            (1, channel, height, width),
-            vec![0f32; height * width],
-        )?;
-
-        // 根据配置标准化图像张量
-        for i in 0..height {
-            for j in 0..width {
-                let now = image[[0, i, j]] as f32;
-                if self.diy {
-                    // 自定义模型
-                    if channel == 1 {
-                        tensor[[0, 0, i, j]] = ((now / 255f32) - 0.456f32) / 0.224f32;
-                    } else {
-                        let r = image[[0, i, j]] as f32;
-                        let g = image[[1, i, j]] as f32;
-                        let b = image[[2, i, j]] as f32;
-                        tensor[[0, 0, i, j]] = ((r / 255f32) - 0.485f32) / 0.229f32;
-                        tensor[[0, 1, i, j]] = ((g / 255f32) - 0.456f32) / 0.224f32;
-                        tensor[[0, 2, i, j]] = ((b / 255f32) - 0.406f32) / 0.225f32;
-                    }
-                } else {
-                    tensor[[0, 0, i, j]] = ((now / 255f32) - 0.5f32) / 0.5f32;
-                }
-            }
-        }
+        let tensor = self.prepare_tensor(image.as_ref(), png_fix, filter)?;
+        anyhow::ensure!(
+            tensor.shape()[3] <= 1024,
+            "probability output requires resized width <= 1024 pixels"
+        );
+        let charset = &self
+            .charset
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("OCR model required"))?
+            .charset;
 
         let ort_outs = &self.session.run(ort::inputs![tensor]?)?;
 
-        let ort_outs = &ort_outs[0].try_extract_tensor()?;
+        let ort_outs = &ort_outs[0].try_extract_tensor::<f32>()?;
 
-        // 长这样 [[[1,2,3,4]], [[1,2,3,4]], [[1,2,3,4]]]
-        let ort_outs = ort_outs.mapv(f32::exp) / ort_outs.mapv(f32::exp).sum();
-
-        // 长这样 [[1,2,3,4], [1,2,3,4], [1,2,3,4]]
-        let ort_outs_sum = ort_outs.sum_axis(ndarray::Axis(2));
-
-        // 根据形状创建一个零数组
-        let mut ort_outs_probability = ndarray::Array::<f32, _>::zeros(ort_outs.raw_dim());
-
-        for i in 0..ort_outs.shape()[0] {
-            let mut a = ort_outs_probability.slice_mut(ndarray::s![i, .., ..]);
-            let b = ort_outs.slice(ndarray::s![i, .., ..]);
-            let c = ort_outs_sum.slice(ndarray::s![i, ..]);
-            let d = &b / &c;
-
-            a.assign(&d);
-        }
-
-        // 调用 next 后，长这样 [[1,2,3,4], [1,2,3,4], [1,2,3,4]]
-        let ort_outs_probability = ort_outs_probability
-            .axis_iter(ndarray::Axis(1))
-            .next()
-            .ok_or(anyhow::anyhow!("expect axis 1"))?;
-
-        let mut result = Vec::new();
-
-        // 扁平化
-        for i in ort_outs_probability.axis_iter(ndarray::Axis(0)) {
-            result.push(i.into_diag().to_vec());
-        }
-
-        if charset_ranges.is_empty() {
-            // 返回全部字符的概率
-            Ok(CharacterProbability {
-                text: None,
-                charset: charset.clone(),
-                probability: result,
-                confidence: None,
-            })
+        anyhow::ensure!(
+            ort_outs.shape().last() == Some(&charset.len()),
+            "model output does not match charset"
+        );
+        let lookup: std::collections::HashMap<&str, usize> = if charset_ranges.is_empty() {
+            std::collections::HashMap::new()
         } else {
-            // 根据指定的字符范围，从模型输出的概率结果中提取对应字符的概率
-            // 如果字符不在字符集中，则将其概率设置为 -1.0，表示未知字符
-            let mut probability_result_index = Vec::new();
-
-            for i in charset_ranges {
-                if let Some(v) = charset.iter().position(|v| v == i) {
-                    probability_result_index.push(v);
-                } else {
-                    probability_result_index.push(usize::MAX);
-                }
-            }
-
-            let mut probability_result = Vec::new();
-
-            for item in &result {
-                let mut inner_vec = Vec::new();
-
-                for &i in &probability_result_index {
-                    if i != usize::MAX {
-                        inner_vec.push(item[i]);
-                    } else {
-                        inner_vec.push(-1.0);
-                    }
-                }
-
-                probability_result.push(inner_vec);
-            }
-
-            Ok(CharacterProbability {
-                text: None,
-                charset: charset_ranges.clone(),
-                probability: probability_result,
-                confidence: None,
-            })
+            charset
+                .iter()
+                .enumerate()
+                .map(|(index, character)| (character.as_str(), index))
+                .collect()
+        };
+        let indices: Vec<Option<usize>> = charset_ranges
+            .iter()
+            .map(|c| lookup.get(c.as_str()).copied())
+            .collect();
+        let mut probabilities = Vec::new();
+        for row in ort_outs.rows() {
+            let row = row
+                .as_slice()
+                .ok_or_else(|| anyhow::anyhow!("non-contiguous model output"))?;
+            anyhow::ensure!(row.iter().all(|v| v.is_finite()), "non-finite model output");
+            let values = softmax(row);
+            probabilities.push(if charset_ranges.is_empty() {
+                values
+            } else {
+                indices
+                    .iter()
+                    .map(|index| index.map_or(-1.0, |i| values[i]))
+                    .collect()
+            });
         }
+        Ok(CharacterProbability {
+            text: None,
+            charset: if charset_ranges.is_empty() {
+                charset.clone()
+            } else {
+                charset_ranges.clone()
+            },
+            probability: probabilities,
+            confidence: None,
+        })
+    }
+
+    fn prepare_tensor(
+        &self,
+        data: &[u8],
+        png_fix: bool,
+        filter: Option<ColorFilter>,
+    ) -> anyhow::Result<ndarray::Array4<f32>> {
+        self.prepare_decoded_tensor(load_image(data)?, png_fix, filter)
+    }
+
+    fn prepare_decoded_tensor(
+        &self,
+        mut image: image::DynamicImage,
+        png_fix: bool,
+        filter: Option<ColorFilter>,
+    ) -> anyhow::Result<ndarray::Array4<f32>> {
+        let config = self
+            .charset
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("OCR model required"))?;
+        if png_fix {
+            image = png_rgba_black_preprocess(&image);
+        }
+        if let Some(filter) = filter {
+            image = filter.filter_decoded(image);
+        }
+        let height = config.image[1] as u32;
+        let width = if config.image[0] == -1 {
+            if config.word {
+                height
+            } else {
+                (u64::from(image.width()) * u64::from(height) / u64::from(image.height())).max(1)
+                    as u32
+            }
+        } else {
+            config.image[0] as u32
+        };
+        anyhow::ensure!(
+            height > 0 && height <= 4096 && width > 0 && width <= 8192,
+            "resized OCR image exceeds limits"
+        );
+        let image = image.resize_exact(width, height, image::imageops::FilterType::Lanczos3);
+        let channels = config.channel as usize;
+        anyhow::ensure!(matches!(channels, 1 | 3), "model channels must be 1 or 3");
+        let mut tensor = ndarray::Array4::zeros((1, channels, height as usize, width as usize));
+        if channels == 1 {
+            for (x, y, pixel) in image.to_luma8().enumerate_pixels() {
+                let value = f32::from(pixel[0]) / 255.0;
+                tensor[[0, 0, y as usize, x as usize]] = if self.diy {
+                    (value - 0.456) / 0.224
+                } else {
+                    (value - 0.5) / 0.5
+                };
+            }
+        } else {
+            for (x, y, pixel) in image.to_rgb8().enumerate_pixels() {
+                for c in 0..3 {
+                    tensor[[0, c, y as usize, x as usize]] = (f32::from(pixel[c]) / 255.0
+                        - [0.485, 0.456, 0.406][c])
+                        / [0.229, 0.224, 0.225][c];
+                }
+            }
+        }
+        Ok(tensor)
     }
 
     /// 内容识别。
@@ -1658,81 +1553,17 @@ impl<'a> Ddddocr<'a> {
     where
         I: AsRef<[u8]>,
     {
-        let image = match filter {
-            Some(v) => v.filter(image.as_ref())?,
-            None => image::load_from_memory(image.as_ref())?,
-        };
+        let tensor = self.prepare_tensor(image.as_ref(), png_fix, filter)?;
+        self.classify_tensor(tensor)
+    }
 
-        let charset = self.charset.as_ref().unwrap();
-        let word = charset.word;
-        let resize = charset.image;
-        let channel = charset.channel;
-        let charset = &charset.charset;
-
-        // 使用 ANTIALIAS (Lanczos3) 缩放图片
-        let image = if resize[0] == -1 {
-            if word {
-                image.resize_exact(
-                    resize[1] as u32,
-                    resize[1] as u32,
-                    image::imageops::FilterType::Lanczos3,
-                )
-            } else {
-                image.resize_exact(
-                    image.width() * resize[1] as u32 / image.height(),
-                    resize[1] as u32,
-                    image::imageops::FilterType::Lanczos3,
-                )
-            }
-        } else {
-            image.resize_exact(
-                resize[0] as u32,
-                resize[1] as u32,
-                image::imageops::FilterType::Lanczos3,
-            )
-        };
-
-        // 设置图片的通道数为模型所需的通道数
-        let image_bytes = if channel == 1 {
-            image::EncodableLayout::as_bytes(image.to_luma8().as_ref()).to_vec()
-        } else if png_fix {
-            png_rgba_black_preprocess(&image).to_rgb8().to_vec()
-        } else {
-            image.to_rgb8().to_vec()
-        };
-
-        // 图片转换到张量
-        let channel = channel as usize;
-        let width = image.width() as usize;
-        let height = image.height() as usize;
-        let image = ndarray::Array::from_shape_vec((channel, height, width), image_bytes)?;
-        let mut tensor = ndarray::Array::from_shape_vec(
-            (1, channel, height, width),
-            vec![0f32; channel * height * width],
-        )?;
-
-        // 根据配置标准化图像张量
-        for i in 0..height {
-            for j in 0..width {
-                let now = image[[0, i, j]] as f32;
-
-                if self.diy {
-                    // 自定义模型
-                    if channel == 1 {
-                        tensor[[0, 0, i, j]] = ((now / 255f32) - 0.456f32) / 0.224f32;
-                    } else {
-                        let r = image[[0, i, j]] as f32;
-                        let g = image[[1, i, j]] as f32;
-                        let b = image[[2, i, j]] as f32;
-                        tensor[[0, 0, i, j]] = ((r / 255f32) - 0.485f32) / 0.229f32;
-                        tensor[[0, 1, i, j]] = ((g / 255f32) - 0.456f32) / 0.224f32;
-                        tensor[[0, 2, i, j]] = ((b / 255f32) - 0.406f32) / 0.225f32;
-                    }
-                } else {
-                    tensor[[0, 0, i, j]] = ((now / 255f32) - 0.5f32) / 0.5f32;
-                }
-            }
-        }
+    fn classify_tensor(&self, tensor: ndarray::Array4<f32>) -> anyhow::Result<String> {
+        let config = self
+            .charset
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("OCR model required"))?;
+        let word = config.word;
+        let charset = &config.charset;
 
         if word {
             Ok(self.session.run(ort::inputs![tensor]?)?[1]
@@ -1744,55 +1575,28 @@ impl<'a> Ddddocr<'a> {
             // todo: 自定义模型未经测试
             let result = &self.session.run(ort::inputs![tensor]?)?[0];
             let result = result.try_extract_tensor::<u32>()?;
-            let mut last_item = 0;
-
-            Ok(result
-                .iter()
-                .filter(|&&v| {
-                    if v != 0 && v != last_item {
-                        last_item = v;
-                        true
-                    } else {
-                        false
-                    }
-                })
-                .map(|&v| charset[v as usize].to_string())
-                .collect::<String>())
+            Ok(decode_ctc(
+                result.iter().map(|&value| value as usize),
+                charset,
+            ))
         } else {
             let result = &self.session.run(ort::inputs![tensor]?)?[0];
             let result = result.try_extract_tensor::<f32>()?;
-            let mut last_item = 0;
 
             // 输入长这样 [[[1,2,3,4], [1,2,3,4], [1,2,3,4]]]
             // 我们要获取   ^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^
             // 最后结果 [3, 3, 3]
             // 这是最大值的索引
-            let result = result
-                .rows()
-                .into_iter()
-                .map(|v| {
-                    // 找出数组中元素值最大的那个，然后获取他在数组中的索引
-                    v.iter()
-                        .enumerate()
-                        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                        .unwrap_or((0, &0.0))
-                        .0
-                })
-                .collect::<Vec<usize>>();
+            let result = result.rows().into_iter().map(|v| {
+                // 找出数组中元素值最大的那个，然后获取他在数组中的索引
+                v.iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                    .unwrap_or((0, &0.0))
+                    .0
+            });
 
-            // 过滤无效字符
-            Ok(result
-                .iter()
-                .filter(|&&v| {
-                    if v != 0 && v != last_item {
-                        last_item = v;
-                        true
-                    } else {
-                        false
-                    }
-                })
-                .map(|&v| charset[v].to_string())
-                .collect::<String>())
+            Ok(decode_ctc(result, charset))
         }
     }
 
@@ -1805,19 +1609,18 @@ impl<'a> Ddddocr<'a> {
     where
         I: AsRef<[u8]>,
     {
-        let image = image::load_from_memory(image.as_ref())?;
+        let image = load_image(image.as_ref())?;
 
         let mut result = Vec::new();
 
         for i in bbox {
-            let mut buffer = std::io::Cursor::new(Vec::new());
-
-            // todo: 使用 png 格式会不会有问题啊？
-            image::imageops::crop_imm(&image, i.x1, i.y1, i.x2 - i.x1 + 1, i.y2 - i.y1 + 1)
-                .to_image()
-                .write_to(&mut buffer, image::ImageFormat::Png)?;
-
-            result.push((*i, self.classification(buffer.into_inner())?));
+            anyhow::ensure!(
+                i.x1 < i.x2 && i.y1 < i.y2 && i.x2 <= image.width() && i.y2 <= image.height(),
+                "invalid bounding box"
+            );
+            let cropped = image.crop_imm(i.x1, i.y1, i.x2 - i.x1, i.y2 - i.y1);
+            let tensor = self.prepare_decoded_tensor(cropped, false, None)?;
+            result.push((*i, self.classify_tensor(tensor)?));
         }
 
         Ok(result)
@@ -1840,11 +1643,11 @@ impl<'a> Ddddocr<'a> {
     where
         I: AsRef<[u8]>,
     {
-        let image = image::load_from_memory(image.as_ref())?.to_rgb8();
+        let image = load_image(image.as_ref())?.to_rgb8();
         let (h, w) = (image.height(), image.width());
         let r = (MODEL_WIDTH as f32 / h as f32).min(MODEL_WIDTH as f32 / w as f32);
-        let new_w = (w as f32 * r) as u32;
-        let new_h = (h as f32 * r) as u32;
+        let new_w = ((w as f32 * r) as u32).max(1);
+        let new_h = ((h as f32 * r) as u32).max(1);
 
         let resized =
             image::imageops::resize(&image, new_w, new_h, image::imageops::FilterType::Triangle);
@@ -1870,6 +1673,14 @@ impl<'a> Ddddocr<'a> {
 
         let output = &self.session.run(ort::inputs![input_tensor]?)?[0];
         let output = output.try_extract_tensor::<f32>()?;
+        let expected_boxes: usize = STRIDES
+            .iter()
+            .map(|stride| ((MODEL_WIDTH / stride) * (MODEL_HEIGHT / stride)) as usize)
+            .sum();
+        anyhow::ensure!(
+            output.shape() == [1, expected_boxes, 6],
+            "invalid detection model output shape"
+        );
         let mut dets = Vec::new();
         let mut grid_offset = 0;
 
@@ -1884,7 +1695,7 @@ impl<'a> Ddddocr<'a> {
                     let cls = output[[0, i, 5]];
                     let score = obj * cls;
 
-                    if score < SCORE_THR {
+                    if !score.is_finite() || score < SCORE_THR {
                         continue;
                     }
 
@@ -1915,7 +1726,7 @@ impl<'a> Ddddocr<'a> {
         let scores: Vec<f32> = dets.iter().map(|d| d.0).collect();
         let mut order: Vec<usize> = (0..scores.len()).collect();
 
-        order.sort_by(|&a, &b| scores[b].partial_cmp(&scores[a]).unwrap());
+        order.sort_by(|&a, &b| scores[b].total_cmp(&scores[a]));
 
         let mut keep = Vec::new();
 
@@ -2112,7 +1923,7 @@ mod tests {
         println!("{:?}", result);
 
         // 绘制红框
-        let mut image = image::load_from_memory(&input).unwrap().to_rgb8();
+        let mut image = load_image(&input).unwrap().to_rgb8();
 
         for v in result {
             for i in v.x1..=v.x2 {
@@ -2140,7 +1951,7 @@ mod tests {
         println!("{:?}", result);
 
         // 绘制红框
-        let mut image = image::load_from_memory(&input).unwrap().to_rgb8();
+        let mut image = load_image(&input).unwrap().to_rgb8();
 
         for v in result {
             for i in v.x1..=v.x2 {
@@ -2198,5 +2009,182 @@ mod tests {
 
         #[cfg(not(feature = "inline-model"))]
         println!("not feature inline-model");
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    fn png(image: image::DynamicImage) -> Vec<u8> {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        bytes.into_inner()
+    }
+
+    #[test]
+    fn ctc_keeps_repetitions_separated_by_blank() {
+        let charset = vec!["".into(), "a".into(), "b".into()];
+        assert_eq!(decode_ctc([1, 1, 0, 1, 2, 2, 0, 2], &charset), "aabb");
+        assert_eq!(decode_ctc([0, 0], &charset), "");
+        assert_eq!(decode_ctc([99], &charset), "");
+    }
+
+    #[test]
+    fn probability_text_uses_ctc_and_handles_empty_rows() {
+        let mut value = CharacterProbability {
+            text: None,
+            charset: vec!["".into(), "a".into()],
+            probability: vec![
+                vec![0.0, 1.0],
+                vec![0.0, 1.0],
+                vec![1.0, 0.0],
+                vec![0.0, 1.0],
+                vec![],
+            ],
+            confidence: None,
+        };
+        assert_eq!(value.get_text(), "aa");
+    }
+
+    #[test]
+    fn softmax_is_stable_for_large_logits() {
+        let probabilities = softmax(&[10000.0, 10001.0, -10000.0]);
+        assert!(probabilities.iter().all(|p| p.is_finite()));
+        assert!((probabilities.iter().sum::<f32>() - 1.0).abs() < 1e-6);
+        assert!(probabilities[1] > probabilities[0]);
+        let mut logits = vec![-18.0; 8210];
+        logits[0] = 0.0;
+        let probabilities = softmax(&logits);
+        assert!((probabilities.iter().map(|&p| f64::from(p)).sum::<f64>() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn alpha_is_composited_before_grayscale() {
+        let input = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(3, 1, |x, _| {
+            image::Rgba([0, 0, 0, [0, 128, 255][x as usize]])
+        }));
+        let result = png_rgba_black_preprocess(&input).to_luma8();
+        assert_eq!(result.into_raw(), [255, 127, 0]);
+    }
+
+    #[test]
+    fn comparison_accepts_grayscale_and_rgba_and_top_row_changes() {
+        let target = png(image::DynamicImage::ImageLuma8(
+            image::GrayImage::from_pixel(8, 8, image::Luma([0])),
+        ));
+        let background = png(image::DynamicImage::ImageRgba8(
+            image::RgbaImage::from_pixel(8, 8, image::Rgba([255, 255, 255, 255])),
+        ));
+        assert_eq!(slide_comparison(target, background).unwrap(), (2, 0));
+    }
+
+    #[test]
+    fn transparent_slider_is_rejected() {
+        let image = png(image::DynamicImage::new_rgba8(8, 8));
+        assert!(slide_match(&image, &image)
+            .unwrap_err()
+            .to_string()
+            .contains("transparent"));
+    }
+
+    #[test]
+    fn decode_rejects_oversized_and_invalid_images() {
+        assert!(load_image(&[]).is_err());
+        assert!(load_image(&vec![0; MAX_IMAGE_BYTES + 1]).is_err());
+        let image = png(image::DynamicImage::new_luma8(MAX_IMAGE_SIDE + 1, 1));
+        assert!(load_image(&image).is_err());
+    }
+
+    #[test]
+    fn template_work_is_bounded() {
+        assert!(check_match_work(
+            &image::GrayImage::new(300, 300),
+            &image::GrayImage::new(600, 600)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn shared_model_is_thread_safe_and_ranges_are_deterministic() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Ddddocr<'static>>();
+        let model = std::sync::Arc::new(ddddocr_classification().unwrap());
+        assert_eq!(model.calc_ranges("aaba"), ["a", "b", ""]);
+        let expected = model
+            .classification(include_bytes!("../image/1.png"))
+            .unwrap();
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let model = model.clone();
+                std::thread::spawn(move || {
+                    model
+                        .classification(include_bytes!("../image/1.png"))
+                        .unwrap()
+                })
+            })
+            .collect();
+        for handle in handles {
+            assert_eq!(handle.join().unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn bbox_rejects_invalid_coordinates_and_matches_whole_image() {
+        let model = ddddocr_classification().unwrap();
+        let bytes = include_bytes!("../image/1.png");
+        let image = load_image(bytes).unwrap();
+        let bbox = BBox {
+            x1: 0,
+            y1: 0,
+            x2: image.width(),
+            y2: image.height(),
+        };
+        assert_eq!(
+            model.classification_bbox(bytes, &vec![bbox]).unwrap()[0].1,
+            model.classification(bytes).unwrap()
+        );
+        assert!(model
+            .classification_bbox(
+                bytes,
+                &vec![BBox {
+                    x1: 2,
+                    y1: 0,
+                    x2: 1,
+                    y2: 1
+                }]
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn rgb_tensor_uses_interleaved_pixels_and_png_fix_works_for_gray_models() {
+        let mut model = ddddocr_classification().unwrap();
+        let image = png(image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(
+            2,
+            1,
+            |x, _| {
+                if x == 0 {
+                    image::Rgb([255, 0, 0])
+                } else {
+                    image::Rgb([0, 0, 255])
+                }
+            },
+        )));
+        let charset = model.charset.as_mut().unwrap().to_mut();
+        charset.channel = 3;
+        charset.image = [2, 1];
+        let tensor = model.prepare_tensor(&image, false, None).unwrap();
+        assert!((tensor[[0, 0, 0, 0]] - (1.0 - 0.485) / 0.229).abs() < 1e-5);
+        assert!((tensor[[0, 0, 0, 1]] - (0.0 - 0.485) / 0.229).abs() < 1e-5);
+        assert!((tensor[[0, 2, 0, 1]] - (1.0 - 0.406) / 0.225).abs() < 1e-5);
+        let charset = model.charset.as_mut().unwrap().to_mut();
+        charset.channel = 1;
+        charset.image = [1, 1];
+        let transparent = png(image::DynamicImage::new_rgba8(1, 1));
+        assert_eq!(
+            model.prepare_tensor(&transparent, true, None).unwrap()[[0, 0, 0, 0]],
+            1.0
+        );
     }
 }
