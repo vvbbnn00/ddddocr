@@ -38,7 +38,7 @@ def get_platform_info():
         if arch == "arm64":
             return "aarch64-unknown-linux-gnu-inline.zip"
         elif arch == "x64":
-            return "x86_64-unknown-linux-musl-inline.zip"
+            return "x86_64-unknown-linux-gnu-inline.zip"
     elif system == "darwin":
         arch = (
             "arm64"

@@ -65,14 +65,7 @@ An easy-to-use general-purpose verification code recognition rust library
 
 # Environment Support
 
-| System           | CPU | GPU | Remarks                                                                                                                                       |
-| ---------------- | --- | --- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Windows 64-bit   | √   | ?   | Some versions of Windows require installing <a href="https://www.ghxi.com/yxkhj.html">vc runtime library</a>                                  |
-| Windows 32-bit   | √   | ?   | Static linking is not supported. Some versions of Windows require installing <a href="https://www.ghxi.com/yxkhj.html">vc runtime library</a> |
-| Linux 64 / ARM64 | √   | ?   | May need to upgrade the glibc version, <a href=https://www.cnblogs.com/fireinstone/p/18169273>upgrade glibc version</a>                       |
-| Linux 64 / MUSL  | √   | ?   | No glibc required, statically linked                                                                                                          |
-| Linux 32         | ×   | ?   |                                                                                                                                               |
-| Macos X64        | √   | ?   | M1/M2/M3 ... Chip reference <a href="https://github.com/sml2h3/ddddocr/issues/67"> #67 </a>                                                   |
+Deployment and release builds target Linux amd64 / arm64 (GNU/glibc). Docker is recommended. Inference uses the CPU by default, and the image installs its system runtime libraries.
 
 # Installation steps
 
@@ -472,7 +465,7 @@ Please manually download the [onnxruntime](https://github.com/microsoft/onnxrunt
 
 Windows static linking failed, please install vs2022.
 
-Linux musl should be compiled with docker.
+The default image and release builds use Linux GNU/glibc; MUSL builds are no longer provided.
 
 Linux x86-64 static linking failed, please install gcc11 and g++11, ubuntu ≥ 20.04.
 

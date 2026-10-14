@@ -65,14 +65,7 @@ a simple OCR API server, very easy to deploy。
 
 # 环境支持
 
-| 系统             | CPU | GPU | 备注                                                                                                 |
-| ---------------- | --- | --- | ---------------------------------------------------------------------------------------------------- |
-| Windows 64位     | √   | ?   | 部分版本 Windows 需要安装 <a href="https://www.ghxi.com/yxkhj.html">vc 运行库</a>                    |
-| Windows 32位     | √   | ?   | 不支持静态链接，部分版本 Windows 需要安装 <a href="https://www.ghxi.com/yxkhj.html">vc 运行库</a>    |
-| Linux 64 / ARM64 | √   | ?   | 可能需要升级 glibc 版本， <a href=https://www.cnblogs.com/fireinstone/p/18169273>升级 glibc 版本</a> |
-| Linux 64 / MUSL  | √   | ?   | 不需要 glibc，静态链接                                                                               |
-| Linux 32         | ×   | ?   |                                                                                                      |
-| Macos X64        | √   | ?   | M1/M2/M3 ... 芯片参考<a href="https://github.com/sml2h3/ddddocr/issues/67"> #67 </a>                 |
+部署和发布构建只面向 Linux amd64 / arm64（GNU/glibc），推荐使用 Docker。默认使用 CPU 推理；容器所需的系统运行库由镜像安装。
 
 # 安装步骤
 
@@ -472,7 +465,7 @@ ddddocr.exe --help
 
 windows 静态链接失败，请安装 vs2022。
 
-linux musl 要用 docker 编译。
+默认镜像和发布构建使用 Linux GNU/glibc，不再提供 MUSL 构建。
 
 linux x86-64 静态链接失败，请安装 gcc11 和 g++11，ubuntu ≥ 20.04。
 
